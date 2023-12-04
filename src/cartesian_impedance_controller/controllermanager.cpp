@@ -12,54 +12,46 @@ bool ControllerManager::on_initialize()
     _model->update();
 
     /* Read stiffness value from YAML file */
-    vector<string> leg_chains = getParamOrThrow<vector<string>>("~chain_names");
-    vector<string> _end_effector_links = getParamOrThrow<vector<string>>("~end_effector_links");
-    vector<double> stiffness_front = getParamOrThrow<vector<double>>("~stiffness_front");
-    vector<double> stiffness_back = getParamOrThrow<vector<double>>("~stiffness_back");
-    double damping_factor = getParamOrThrow<double>("~damping");
 
-    Eigen::Map<Eigen::Vector6d> map1(stiffness_front.data());
-    Eigen::Map<Eigen::Vector6d> map2(stiffness_back.data());
+    double damping_factor = 1;
 
-    _stiffness.push_back(map1);
-    _stiffness.push_back(map1);
-    _stiffness.push_back(map2);
-    _stiffness.push_back(map2);
+    _stiffness << 2000, 2000, 2000, 300, 300, 300;
 
-    int i = 0;
+    string arm_chain = "left_arm";
 
-    for (string chain : leg_chains){
+    if (!_robot->hasChain(arm_chain)){
 
-        if (!_robot->hasChain(chain)){
+        cout << "[ERROR]: robot does not have chain " << arm_chain << endl;
+        return false;
 
-            cout << "[ERROR]: robot does not have chain " << chain << endl;
-            return false;
+    } else{
 
-        } else{
+        RobotChain& arm = _robot->chain(arm_chain);
 
-            RobotChain& leg = _robot->chain(chain);
+        _legs_controller.push_back(
+            std::make_unique<CartesianImpedanceController>(_model,
+                                                           _stiffness.asDiagonal(),
+                                                           arm.getTipLinkName(),
+                                                           arm.getBaseLinkName(),
+                                                           damping_factor));
 
-            _legs_controller.push_back(
-                std::make_unique<CartesianImpedanceController>(_model,
-                                                               _stiffness[i].asDiagonal(),
-                                                               _end_effector_links[i],
-                                                               leg.getBaseLinkName(),
-                                                               damping_factor));
-            i++;
+        for (string joint_name : arm.getJointNames()){
 
-            for (string joint_name : leg.getJointNames()){
+            if (!_robot->hasJoint(joint_name)){
 
-                if (!_robot->hasJoint(joint_name)){
-                    //cout << "[ERROR]: robot does not have joint " << joint_name << endl;
-                    return false;
-                } else {
-                    joint_names.push_back(joint_name);
-                    _ctrl_map[joint_name] = ControlMode::Effort() + ControlMode::Stiffness() + ControlMode::Damping();
-                    _stiff_tmp_state[joint_name] = 0.0;
-                    _damp_tmp_state[joint_name] = 0.0;
-                }
+                //cout << "[ERROR]: robot does not have joint " << joint_name << endl;
+                return false;
+
+            } else {
+
+                joint_names.push_back(joint_name);
+                _ctrl_map[joint_name] = ControlMode::Effort() + ControlMode::Stiffness() + ControlMode::Damping();
+                _stiff_tmp_state[joint_name] = 0.0;
+                _damp_tmp_state[joint_name] = 0.0;    // Let's try to make it works just with the stiffness, leaving the joint damping set
             }
+
         }
+
     }
 
     setDefaultControlMode(_ctrl_map);

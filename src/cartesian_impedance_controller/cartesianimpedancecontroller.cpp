@@ -84,7 +84,7 @@ void CartesianImpedanceController::update_inertia()
      * invert the matrix using the inverse of the SVD decomposition (that since Λ is symmetric
      * is equal to a spectral theorem UVU^T), quick and dirty method
     */
-    _op_sp_inertia.noalias() = svd_inverse(_op_sp_inertia);
+    _op_sp_inertia.noalias() = _op_sp_inertia.inverse();
 
     // NOTE: Debug print
     //cout << "Lambda:\n" << _op_sp_inertia << endl;
