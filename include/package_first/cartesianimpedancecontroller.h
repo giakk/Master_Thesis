@@ -47,19 +47,11 @@ public:
 
     CartesianImpedanceController();
 
-//    CartesianImpedanceController(ModelInterface::Ptr model,
-//                                 const string end_effector_link_name,
-//                                 const string root_link_name = "base_link");
-
-//    CartesianImpedanceController(ModelInterface::Ptr model,
-//                                 const string end_effector_link_name,
-//                                 const string root_link_name,
-//                                 Eigen::Matrix6d stiffness = Eigen::Matrix6d::Identity());
-
     CartesianImpedanceController(ModelInterface::Ptr model,
                                  Eigen::Matrix6d stiffness,
                                  const string end_effector,
-                                 const string base_link = "torno");
+                                 const string base_link,
+                                 double damping_factor);
 
     //~CartesianImpedanceController();
 
@@ -81,23 +73,6 @@ public:
     // ==============================================================================
 
     /**
-     * @brief Set the stiffness matrix to a new value.
-     *
-     * This function sets the stiffness matrix to the specified Eigen::Matrix6d.
-     *
-     * @param new_K The new stiffness matrix.
-     */
-    void set_stiffness(const Eigen::Vector6d &new_K);
-
-    /**
-     * @brief Reset the stiffness matrix to a default value.
-     *
-     * This function resets the stiffness matrix to a default or initial value.
-     * Use this when you want to clear or reset the stiffness matrix.
-     */
-    void set_stiffness();
-
-    /**
      * @brief set_reference_value sets the reference values used to compute the error in the impedance dynamic
      * @param acc_ref is the reference acceleration value of the end effector
      * @param vel_ref is the reference velocity value of the end effector
@@ -106,12 +81,10 @@ public:
     void set_reference_value();
 
     /**
-     * @brief setEnd_effector_link set the name of the end effector link, empty string by default.
-     * @param newEnd_effector_link the new value.
+     * @brief reset_logger will reset the logger used to create the .mat file able to plot variable in Matlab
+     * It is mandatory to reset the logger, otherwise the file will not contain the data
      */
-    void setEnd_effector_link(const string &newEnd_effector_link);
-
-    void reset_logger();
+    //void reset_logger();
 
 private:
 
@@ -119,31 +92,25 @@ private:
     // Variables
     // ==============================================================================
 
-    double _dt; // sampling time
-    double _n_joints = 6; // number of joints
-
     string _root_link = "base_link";    // name of the root link, base_link by default
     string _end_effector_link = ""; // name of the end effector link, empty string by default
 
     XBot::ModelInterface::Ptr _model;
 
-    //RobotChain& _leg;
-
-    JointNameMap _ctrl_joint;
-
-    // Reference acceleration, velocity, position of the end-effector w.r.t. to the base link. By default equal to zero
+    // Reference velocity, position of the end-effector w.r.t. to the root link.
     Eigen::Affine3d _x_ref, _x_real;
 
-    // Actual acceleration, velocity, position of the end-effector w.r.t. to the base link
+    // Real velocity, position of the end-effector w.r.t. to the root link
     Eigen::Vector6d _xdot_real;
     Eigen::Vector6d _xdot_prec; // used for the computation of the acceleration that is done by dv/dt
 
-    // Error between the actual and reference values
+    // Error variables
     Eigen::Vector6d _edot, _e;
 
     // Cartesian Controller
     Eigen::Matrix6d _K_omega, _D_zeta;   // diagonal matrix that represent the elementary stiffness and damping of the Cartesian axis
     Eigen::Matrix6d _K, _D; // computed stiffness and damping matrix
+    double _zeta;   //ζ -> 0 for undamped behavoir and 1 for critically damped behavior
 
     // Generic Matrix
     Eigen::Matrix6d _op_sp_inertia; // operational space inertial matrix, usually referred to as Λ
@@ -151,15 +118,41 @@ private:
     Eigen::MatrixXd _B_inv; // inertia matrix in joint space
     Eigen::Matrix6d _Q; // resulting matrix from the Cholesky decomposition of the operational space inertia, used in the computation of the damping matrix
 
-    //SVD decomposition
-    Eigen::MatrixXd _U;
-    Eigen::MatrixXd _V;
-    Eigen::VectorXd _S = Eigen::VectorXd(6);
-    Eigen::VectorXd _S_pseudo_inverse = Eigen::VectorXd(6);
-    double _rho = 0.001;
+    // SVD decomposition
+    Eigen::Matrix6d _U;
+    Eigen::Matrix6d _V;
+    Eigen::Vector6d _S;
+    Eigen::Vector6d _S_pseudo_inverse;
+    double _rho = 0.001;    // offset to guarantee positive definiteness
+    double _offset = 0.01;
 
-    SignProcUtils::MovAvrgFilt _velocity_filter;   // Moving average filter of the velocity, used to compute the acceleration through numerical derivative
-    XBot::MatLogger2::Ptr logger;
+    // Orientation error
+    Eigen::Matrix3d _rotational_error;
+    Eigen::Vector3d _axis;
+    double _angle;
+
+    // Force computation
+    Eigen::Vector6d _force;
+    Eigen::VectorXd _torque;
+
+    // Q computation
+    Eigen::Matrix6d _Phi_B;
+    Eigen::Vector6d _lambda_B;
+    Eigen::Matrix6d _Lambda_B_sqrt;
+    Eigen::Matrix6d _Phi_B_hat;
+    Eigen::Matrix6d _A_hat;
+    Eigen::Matrix6d _Phi_A;
+    Eigen::Matrix6d _Phi;
+
+    // Other used matrix
+    Eigen::Vector6d _diag;  // matrix sqrt computation
+    Eigen::Vector6d _eigenvalues;   // check positive definiteness
+
+    // Eigen solver
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix6d> _eigen_solver;
+    Eigen::JacobiSVD<Eigen::Matrix6d> _svd;
+
+    //XBot::MatLogger2::Ptr logger;
 
 
     // ==============================================================================
@@ -167,10 +160,10 @@ private:
     // ==============================================================================
 
     /**
-     * @brief cholesky_decomp compute the Cholesky decomposition of the operational space inertia
-     * in order to obtain the matrix Q used in the computation of stiffness (K) and damping (D)
+     * @brief Q_computation will solve a generalized eigenvalue problem. Will internally update the
+     * matrix _Q and _K_omega. Refer to documentation for the algorithm explanation
      */
-    Eigen::Matrix6d Q_computation(const Eigen::MatrixXd& A, const Eigen::MatrixXd& B);
+    Eigen::Matrix6d Q_computation(const Eigen::Matrix6d& A, const Eigen::Matrix6d& B);
 
     /**
      * @brief matrix_sqrt compute the square root of each elements of the matrix
@@ -180,11 +173,11 @@ private:
     Eigen::Matrix6d matrix_sqrt(Eigen::Matrix6d matrix);
 
     /**
-     * @brief isPositiveDefinite
-     * @param matrix
-     * @return
+     * @brief isPositiveDefinite will check is the matrix is positive definite, positive semidefinite or not.
+     * Will print the corresponding results
+     * @param matrix is the matrix to check
      */
-    void isPositiveDefinite(const Eigen::MatrixXd& matrix);
+    void isPositiveDefinite(const Eigen::Matrix6d& matrix);
 
     /**
      * @brief Updates the operational space inertia matrix Λ and computes the Cholesky factor Q.
@@ -196,12 +189,6 @@ private:
      */
 
     void update_inertia();
-
-    /**
-     * @brief update_K_omega is a function that computes the new value of the natural frequency due to the change
-     * in the operational space inertia matrix
-     */
-    void update_K_omega();
 
     /**
      * @brief update_D compute the new value of the damping matrix after computing Q and the natural frequency matrix _K_omega
@@ -231,11 +218,19 @@ private:
      */
     Eigen::Matrix6d  svd_inverse(Eigen::Matrix6d matrix);
 
+    /**
+     * @brief f is the function used to compute the diagonal values of the pseudo inverse of the singular values matrix
+     * @param x is the singular value to be inverted
+     * @return The resulting value of the function
+     */
     double f(double x);
 
+    /**
+     * @brief orientation_error use the method explained at pg 139 of the Robotics Modelling, Planning and Control (Siciliano),
+     * in particula the Axis and angle method.
+     * @return Will return the orientation angle computed as Ref - Real
+     */
     Eigen::Vector3d orientation_error();
-
-    Eigen::Matrix6d cholesky_decomp(Eigen::Matrix6d matrix);
 
 };
 

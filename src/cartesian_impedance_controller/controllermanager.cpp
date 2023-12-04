@@ -1,13 +1,9 @@
 #include "controllermanager.h"
 
-//NOTE: getParamOrThrow will take the the parameters from the YAML file, so they have to be defined in it
-
 bool ControllerManager::on_initialize()
 {
 
     _robot->sense();
-
-    // TODO: about the derivation time, how it works
 
     _model = ModelInterface::getModel(_robot->getConfigOptions());
 
@@ -15,54 +11,58 @@ bool ControllerManager::on_initialize()
 
     _model->update();
 
-    /* Read stiffness value from YAML file
-    auto stiffness = getParamOrThrow<vector<double>>("~stiffness");
+    /* Read stiffness value from YAML file */
+    vector<string> leg_chains = getParamOrThrow<vector<string>>("~chain_names");
+    vector<string> _end_effector_links = getParamOrThrow<vector<string>>("~end_effector_links");
+    vector<double> stiffness_front = getParamOrThrow<vector<double>>("~stiffness_front");
+    vector<double> stiffness_back = getParamOrThrow<vector<double>>("~stiffness_back");
+    double damping_factor = getParamOrThrow<double>("~damping");
 
-    if (stiffness.size() < 6){
-        cout << "[ERROR]: stiffness size is less than 6" << endl;
-        return false;
-    }
-    */
-    _stiffness << 2000, 2000, 2000, 300, 300, 300;
+    Eigen::Map<Eigen::Vector6d> map1(stiffness_front.data());
+    Eigen::Map<Eigen::Vector6d> map2(stiffness_back.data());
 
-    string arm_chain = "left_arm";
+    _stiffness.push_back(map1);
+    _stiffness.push_back(map1);
+    _stiffness.push_back(map2);
+    _stiffness.push_back(map2);
 
-    if (!_robot->hasChain(arm_chain)){
+    int i = 0;
 
-        cout << "[ERROR]: robot does not have chain " << arm_chain << endl;
-        return false;
+    for (string chain : leg_chains){
 
-    } else{
+        if (!_robot->hasChain(chain)){
 
-        RobotChain& arm = _robot->chain(arm_chain);
+            cout << "[ERROR]: robot does not have chain " << chain << endl;
+            return false;
 
-        _legs_controller.push_back(
-            std::make_unique<CartesianImpedanceController>(_model,
-                                                           _stiffness.asDiagonal(),
-                                                           arm.getTipLinkName(),
-                                                           arm.getBaseLinkName()));
+        } else{
 
-        for (string joint_name : arm.getJointNames()){
+            RobotChain& leg = _robot->chain(chain);
 
-            if (!_robot->hasJoint(joint_name)){
+            _legs_controller.push_back(
+                std::make_unique<CartesianImpedanceController>(_model,
+                                                               _stiffness[i].asDiagonal(),
+                                                               _end_effector_links[i],
+                                                               leg.getBaseLinkName(),
+                                                               damping_factor));
+            i++;
 
-                //cout << "[ERROR]: robot does not have joint " << joint_name << endl;
-                return false;
+            for (string joint_name : leg.getJointNames()){
 
-            } else {
-
-                joint_names.push_back(joint_name);
-                _ctrl_map[joint_name] = ControlMode::Effort() + ControlMode::Stiffness() + ControlMode::Damping();
-                _stiff_tmp_state[joint_name] = 0.0;
-                _damp_tmp_state[joint_name] = 0.0;    // Let's try to make it works just with the stiffness, leaving the joint damping set
+                if (!_robot->hasJoint(joint_name)){
+                    //cout << "[ERROR]: robot does not have joint " << joint_name << endl;
+                    return false;
+                } else {
+                    joint_names.push_back(joint_name);
+                    _ctrl_map[joint_name] = ControlMode::Effort() + ControlMode::Stiffness() + ControlMode::Damping();
+                    _stiff_tmp_state[joint_name] = 0.0;
+                    _damp_tmp_state[joint_name] = 0.0;
+                }
             }
-
         }
-
     }
 
     setDefaultControlMode(_ctrl_map);
-
 
     return true;
 
@@ -106,8 +106,6 @@ void ControllerManager::run()
 
     }
 
-    //cout << effort << endl;
-
     _robot->setEffortReference(effort);
 
     _robot->setStiffness(_stiff_tmp_state);
@@ -125,10 +123,9 @@ void ControllerManager::on_stop()
 
     _robot->move();
 
-
-    for (auto& leg : _legs_controller){
-        leg->reset_logger();
-    }
+//    for (auto& leg : _legs_controller){
+//        leg->reset_logger();
+//    }
 
     cout << "[INFO]: Cartesian impedance control is stopping!" << endl;
 }
